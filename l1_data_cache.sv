@@ -7,7 +7,7 @@
 
 module sram_module(
     input wire clk,
-    input wire write_enable, read_enable,
+    input wire write_enable,
     input wire [8:0] set_index, 
     input wire way_select,  // to select between the two ways
     input wire [31:0] write_data, 
@@ -30,7 +30,7 @@ module sram_module(
         if (write_enable) begin
 //            if (actual_address < (NUM_SETS * ASSOCIATIVITY)) begin
                 memory_array[actual_address] <= write_data;
-        end else if(read_enable) begin
+        end else begin
             read_data = memory_array[actual_address];
         end
     end 
@@ -96,7 +96,6 @@ module L1_Data_Cache(
     typedef struct packed{
         logic [31:0] write_data;
         logic write_enable;
-        logic read_enable;
         logic way;
         logic [8:0] index;
     }sram_data_t;
@@ -105,7 +104,6 @@ module L1_Data_Cache(
     sram_module cache_data_sram (
         .clk(clk),
         .write_enable   (put_sram_data.write_enable),
-        .read_enable    (put_sram_data.read_enable),
         .set_index      (put_sram_data.index),
         .way_select     (put_sram_data.way),
         .write_data     (put_sram_data.write_data),
@@ -143,7 +141,7 @@ module L1_Data_Cache(
                     put_sram_data.index <= i;
                     put_sram_data.way <= j;
                     put_sram_data.write_data <= 0;
-                    // bring down write_enable
+                    // bring down put_sram_data.write_enable
                     cache_tags[i][j] <= 0;
                     valid[i][j] <= 0;
                     dirty[i][j] <= 0;
@@ -196,14 +194,14 @@ module L1_Data_Cache(
                 put_sram_data.way <= way;
                 put_sram_data.write_data <= write_data;
                 
-                // need to get down the put_sram_data.write_enable low?
+                // need to get down the put_sram_data.write_enable low
                 
                 dirty[current_addr.index][way] <= 1;
                 state <= IDLE;
             end else if (read_enable) begin
             
 //                response_data <= cache_data[current_addr.index][way];
-                put_sram_data.read_enable <=1;
+                put_sram_data.write_enable <=0;
                 put_sram_data.index <= current_addr.index;
                 put_sram_data.way <= way;
                 response_data <= sram_read_data;
@@ -231,7 +229,7 @@ module L1_Data_Cache(
             l2_write_enable <= 1;
             
 //            l2_write_data <= cache_data[current_addr.index][lru_way];
-            put_sram_data.read_enable <=1;
+            put_sram_data.write_enable <=0;
             put_sram_data.index <= current_addr.index;
             put_sram_data.way <= lru_way;
             l2_write_data <= sram_read_data;
