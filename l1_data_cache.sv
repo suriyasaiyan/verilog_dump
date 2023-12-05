@@ -5,37 +5,6 @@
 
 // ECC, 2 words per block., CACHE CONFLICT, gate clocking
 
-module sram_module(
-    input wire clk,
-    input wire write_enable,
-    input wire [8:0] set_index, 
-    input wire way_select,  // to select between the two ways
-    input wire [31:0] write_data, 
-    output reg [31:0] read_data  
-);
-    // Constants for cache configuration
-    localparam BLOCK_SIZE    = 4;      //bytes
-    localparam CACHE_SIZE    = 4 * 1024;  // 4 KB
-    localparam ASSOCIATIVITY = 2;     
-    
-    localparam BLOCK_WIDTH   = BLOCK_SIZE * 8; //32 bits
-    localparam NUM_SETS      = CACHE_SIZE/(BLOCK_SIZE * ASSOCIATIVITY); // 512 sets
-    localparam ADDR_WIDTH    = 32; 
-
-    reg [BLOCK_WIDTH -1:0] memory_array [0:NUM_SETS * ASSOCIATIVITY - 1];
-
-    wire [ADDR_WIDTH -1:0] actual_address = set_index * ASSOCIATIVITY + way_select;
-
-    always @(posedge clk) begin
-        if (write_enable) begin
-//            if (actual_address < (NUM_SETS * ASSOCIATIVITY)) begin
-                memory_array[actual_address] <= write_data;
-        end else begin
-            read_data = memory_array[actual_address];
-        end
-    end 
-endmodule : sram_module
-
 `timescale 1ns / 1ps
 module L1_Data_Cache(
     input wire clk,
@@ -69,47 +38,26 @@ module L1_Data_Cache(
     localparam INDEX_WIDTH    = $clog2(NUM_SETS);       // 9 bits
     localparam TAG_WIDTH      = ADDR_WIDTH - OFFSET_WIDTH - INDEX_WIDTH;  // 21 bits
   
+    typedef enum integer {IDLE, CHECK_TAG, WRITEBACK, FILL} cache_state_t;
+    cache_state_t state = IDLE;
+
     // Internal Variables
-//    reg [BLOCK_WIDTH- 1:0] cache_data [0:NUM_SETS-1][0:ASSOCIATIVITY-1];
+    reg [BLOCK_WIDTH- 1:0] cache_data [0:NUM_SETS-1][0:ASSOCIATIVITY-1];
     //need to add offset access
     reg [TAG_WIDTH - 1:0] cache_tags [0:NUM_SETS-1][0:ASSOCIATIVITY-1];
     reg valid [0:NUM_SETS-1][0:ASSOCIATIVITY-1];
     reg dirty [0:NUM_SETS-1][0:ASSOCIATIVITY-1];
     reg [ASSOCIATIVITY-1:0] lru_counter [0:NUM_SETS-1];
+
+    reg [ADDR_WIDTH-1:0]     current_address;
+    reg [TAG_WIDTH-1:0]      current_tag;
+    reg [INDEX_WIDTH-1:0]    current_index;
+    reg [OFFSET_WIDTH-1:0]   current_offset;
     
     reg hit;
     reg [ASSOCIATIVITY-1:0] way, lru_way;
     
-    
-    typedef enum integer {IDLE, CHECK_TAG, WRITEBACK, FILL} cache_state_t;
-    cache_state_t state = IDLE;
-
-    typedef struct packed{
-        logic [31:0] address;
-        logic [TAG_WIDTH-1:0]      tag;
-        logic [INDEX_WIDTH-1:0]    index;
-        logic [OFFSET_WIDTH-1:0]   offset;
-    }current_address_t;
-    current_address_t current_addr;
-    
-    reg [31:0] sram_read_data;
-    typedef struct packed{
-        logic [31:0] write_data;
-        logic write_enable;
-        logic way;
-        logic [8:0] index;
-    }sram_data_t;
-    sram_data_t put_sram_data;
- 
-    sram_module cache_data_sram (
-        .clk(clk),
-        .write_enable   (put_sram_data.write_enable),
-        .set_index      (put_sram_data.index),
-        .way_select     (put_sram_data.way),
-        .write_data     (put_sram_data.write_data),
-        .read_data      (sram_read_data)
-    );
-     
+       
     // LRU Function
     function integer get_lru_way(input integer set_index);
         integer i;
@@ -135,13 +83,7 @@ module L1_Data_Cache(
             state <= IDLE;
             for (i = 0; i < NUM_SETS; i = i+1) begin
                 for (j = 0; j < ASSOCIATIVITY; j = j+1) begin
-                
-//                    cache_data[i][j] <= 0;
-                    put_sram_data.write_enable <= 1;
-                    put_sram_data.index <= i;
-                    put_sram_data.way <= j;
-                    put_sram_data.write_data <= 0;
-                    // bring down put_sram_data.write_enable
+                    cache_data[i][j] <= 0;
                     cache_tags[i][j] <= 0;
                     valid[i][j] <= 0;
                     dirty[i][j] <= 0;
@@ -154,10 +96,10 @@ module L1_Data_Cache(
     task idle_state_logic;
         begin
             if (write_enable || read_enable) begin
-                current_addr.address <= request_address;
-                current_addr.tag     <= request_address[ADDR_WIDTH-1 -: TAG_WIDTH];
-                current_addr.index   <= request_address[(ADDR_WIDTH - TAG_WIDTH - 1)-: INDEX_WIDTH];
-                current_addr.offset  <= request_address[OFFSET_WIDTH-1 -: OFFSET_WIDTH];                      
+                current_address <= request_address;
+                current_tag     <= request_address[ADDR_WIDTH-1 -: TAG_WIDTH];
+                current_index   <= request_address[(ADDR_WIDTH - TAG_WIDTH - 1)-: INDEX_WIDTH];
+                current_offset  <= request_address[OFFSET_WIDTH-1 -: OFFSET_WIDTH];                      
                 state <= CHECK_TAG;
             end
         end
@@ -168,9 +110,9 @@ module L1_Data_Cache(
         begin
             hit = 0;
             // have to parallel check for better performance
-            lru_way = get_lru_way(current_addr.index); // new
+            lru_way = get_lru_way(current_index); // new
             for (i = 0; i < ASSOCIATIVITY; i = i + 1) begin
-                if (valid[current_addr.index][i] && cache_tags[current_addr.index][i] == current_addr.tag) begin
+                if (valid[current_index][i] && cache_tags[current_index][i] == current_tag) begin
                     hit = 1;
                     way = i;                
                     break;
@@ -187,34 +129,21 @@ module L1_Data_Cache(
     task handle_cache_hit;
         begin
             if (write_enable) begin
-//                cache_data[current_addr.index][way] <= write_data;
-                
-                put_sram_data.write_enable <=1;
-                put_sram_data.index <= current_addr.index;
-                put_sram_data.way <= way;
-                put_sram_data.write_data <= write_data;
-                
-                // need to get down the put_sram_data.write_enable low
-                
-                dirty[current_addr.index][way] <= 1;
+                cache_data[current_index][way] <= write_data;
+                dirty[current_index][way] <= 1;
                 state <= IDLE;
             end else if (read_enable) begin
-            
-//                response_data <= cache_data[current_addr.index][way];
-                put_sram_data.write_enable <=0;
-                put_sram_data.index <= current_addr.index;
-                put_sram_data.way <= way;
-                response_data <= sram_read_data;
+                response_data <= cache_data[current_index][way];
                 //do we need to make read_enable low here?
                 state <= IDLE;
             end
-            update_lru_counters(current_addr.index, way);
+            update_lru_counters(current_index, way);
         end
     endtask
 
     task handle_cache_miss;
         begin
-            if (dirty[current_addr.index][lru_way]) begin
+            if (dirty[current_index][lru_way]) begin
                 state <= WRITEBACK;
             end else begin
                 state <= FILL;
@@ -225,19 +154,14 @@ module L1_Data_Cache(
     task writeback_logic;
         begin
             l2_request <= 1;
-            l2_address <= current_addr.address;
+            l2_address <= {cache_tags[current_index][lru_way], current_index, 2'b10};
             l2_write_enable <= 1;
-            
-//            l2_write_data <= cache_data[current_addr.index][lru_way];
-            put_sram_data.write_enable <=0;
-            put_sram_data.index <= current_addr.index;
-            put_sram_data.way <= lru_way;
-            l2_write_data <= sram_read_data;
+            l2_write_data <= cache_data[current_index][lru_way];
     
             if (l2_ready) begin
                 l2_write_enable <= 0;
                 l2_request <=0;
-                state <= FILL; 
+                state <= FILL; // Proceed to fill the cache line
             end 
 //            else begin
 //            state <= FILL; // Directly proceed to fill if the line is not dirty
@@ -248,20 +172,14 @@ module L1_Data_Cache(
     task fill_logic;
         begin  
             l2_request <= 1;
-            l2_address <= current_addr.address;
+            l2_address <= current_address;
             if (l2_ready) begin
-            
-//                cache_data[current_addr.index][lru_way] <= l2_response_data;              
-                put_sram_data.write_enable <=1;
-                put_sram_data.index <= current_addr.index;
-                put_sram_data.way <= lru_way;
-                put_sram_data.write_data <= l2_response_data;
-                
-                cache_tags[current_addr.index][lru_way] <= current_addr.tag;
-                valid[current_addr.index][lru_way] <= 1;
-                dirty[current_addr.index][lru_way] <= 0; 
+                cache_data[current_index][lru_way] <= l2_response_data;
+                cache_tags[current_index][lru_way] <= current_tag;
+                valid[current_index][lru_way] <= 1;
+                dirty[current_index][lru_way] <= 0; 
     
-                update_lru_counters(current_addr.index, lru_way);
+                update_lru_counters(current_index, lru_way);
     
                 l2_request <= 0; 
                 state <= CHECK_TAG; 
@@ -314,4 +232,3 @@ module L1_Data_Cache(
     end
     
 endmodule
-
