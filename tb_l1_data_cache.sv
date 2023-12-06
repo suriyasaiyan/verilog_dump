@@ -1,5 +1,5 @@
-//ver.0
 `timescale 1ns / 1ps
+
 module tb_L1_Data_Cache;
     parameter CLOCK_PERIOD   = 10;    
     reg clk;
@@ -91,27 +91,54 @@ module tb_L1_Data_Cache;
 
     initial begin
         reset_signals();
-        
+        sequential_testing();
+    end
+    
+    task sequential_testing;
+        begin
+        // =================    SEQUENTIAL TESTING  ================= 
         read_enable =1;  
         request_address = 32'h00000832;
-        #61 read_enable = 0; #9;  // fill and read 
+        #51 read_enable = 0; #9;  // fill and read 
+        // lru counter 0: 1 && lru counter 1: 0 - 32'h00000832
         
         #10 read_enable = 1;  
         request_address = 32'hABCDE832;
-        #61 read_enable = 0; #9;
-        
-        test_cache_read_hit (32'h00000832, 32'hEEEEEEEE);
-        test_cache_read_hit (32'hABCDE832, 32'hFFFFFFFF);
-        
-        test_cache_read_miss(32'hAAAAA832, 32'hABCDEFAB); // new
-        
-        test_cache_read_hit (32'hABCDE832, 32'hFFFFFFFF);
-        test_cache_read_miss(32'h00000832, 32'hEEEEEEEE); // new
-        test_cache_write_hit(32'hABCDE832, 32'hFFFFFFFF);
-        test_cache_read_miss(32'hAAAAA832, 32'hABCDEFAB);
-        test_cache_read_writeback_miss(32'hFFFFF832, 32'hFEDCBAFE);
-    end
+        #51 read_enable = 0; #9;
+        // lru counter 0: 0 - 32'hABCDE832 && lru counter 1: 1 - 32'h00000832
 
+        test_cache_read_hit (32'h00000832, 32'hEEEEEEEE); 
+        // lru counter 0: 1 - 32'hABCDE832 && lru counter 1: 0 - 32'h00000832
+
+        test_cache_read_hit (32'hABCDE832, 32'hFFFFFFFF);
+        // lru counter 0: 0 - 32'hABCDE832 && lru counter 1: 1 - 32'h00000832
+
+        test_cache_read_miss(32'hAAAAA832, 32'hABCDEFAB); 
+        // lru counter 0: 1 - 32'hABCDE832 && lru counter 1: 0 - 32'hAAAAA832
+
+        test_cache_read_hit (32'hABCDE832, 32'hFFFFFFFF);
+        // lru counter 0: 0 - 32'hABCDE832 && lru counter 1: 1 - 32'hAAAAA832
+
+        test_cache_read_miss(32'h00000832, 32'hEEEEEEEE); 
+        // lru counter 0: 1 - 32'hABCDE832 && lru counter 1: 0 - 32'h00000832
+
+        test_cache_write_hit(32'hABCDE832, 32'hBEEF_DEAD);
+        // dirty 1 for 32'hABCDE832 with beef_dead
+        // lru counter 0: 0 - 32'hABCDE832 && lru counter 1: 1 - 32'h00000832
+
+        test_cache_read_miss(32'hAAAAA832, 32'hABCDEFAB);
+        // lru counter 0: 1 - 32'hABCDE832 && lru counter 1: 0 - 32'hAAAAA832
+
+        test_cache_read_writeback_miss(32'hFFFFF832, 32'hFEDCBAFE);
+        // lru counter 0: 0 - 32'hFFFFF832 && lru counter 1: 1 - 32'hAAAAA832
+        
+        test_cache_read_hit(32'hAAAAA832, 32'hABCDEFAB);
+        test_cache_read_hit(32'hFFFFF832, 32'hFEDCBAFE);
+        test_cache_read_miss(32'h00000832, 32'hEEEEEEEE);
+        test_cache_read_miss(32'hABCDE832, 32'hFFFFFFFF);
+        end
+    endtask
+    
     task reset_signals;
         begin
             reset = 1;
@@ -132,7 +159,7 @@ module tb_L1_Data_Cache;
             #10 read_enable = 1;
             request_address = addr;
 
-            #31 read_enable = 0;
+            #21 read_enable = 0;
             assert(response_data == expected_data) else $display("Read Hit Test Failed for address %h", addr);
             #9;
         end
@@ -162,7 +189,7 @@ module tb_L1_Data_Cache;
         begin
             #10 read_enable = 1;
             request_address = addr;
-            #61; 
+            #51; 
             read_enable = 0;
             assert(response_data == expected_data) else $display("Read Miss Test Failed for address %h", addr);
             #9;
@@ -217,3 +244,5 @@ module tb_L1_Data_Cache;
             end
     end
 endmodule
+
+
